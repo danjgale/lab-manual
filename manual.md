@@ -4,29 +4,197 @@
 
 
 
+## Skill Prerequisites
+
+
+
+## Pipeline Dependencies
+
+
+
+## Tutorial Data
+
+
+
+The tutorial data set is one of our functional localizer data sets we have sitting around on the server. It includes only two subjects from the data set to simplify things. The directory containing the data looks like this: 
+
+```
+pipeline-tutorial
+└── data
+    ├── sourcedata
+    │   ├── SUB1_MAR5_2014
+    │   └── SUB2_MAR10_2014
+```
+
+If you want to use the tutorial data set, **make sure you copy over your own separate version** (either to your user account on the server or locally). 
+
+If you do not have access to this data (i.e. you are not in our lab, you do not have access to the server, etc) then you can try to create your own data set with the same directory structure, using two subjects from your own data. This *will* change things (especially when configuring your BIDS conversion), but hopefully you can still follow along. 
+
+
+
+# The pipeline
+
+
 
 ## Converting raw DICOMs to NIfTI
 
-
 ### BIDS format
+
+https://github.com/bids-standard/bids-starter-kit/wiki
+
+
+
+https://github.com/bids-standard/bids-starter-kit/wiki/The-BIDS-folder-hierarchy
+
+
+
 
 
 ### Bidsify
 
 
-#### Example 1: Single-session conversion
+
+
+#### General Example 1: Single-session conversion
 
 `$ bidsify -d dicom-directory -o bids-directory -c config.json`
 
 `$ bidsify -d dicom-directory -o bids-directory -c config.json --ignore behaviour-folder`
 
-#### Example 2: Multi-session conversion
+#### General Example 2: Multi-session conversion
 
 `$ bidsify -d dicom-directory -o bids-directory -c config.json -s ses-01 -m submap.json`
 
 `$ bidsify -d dicom-directory -o bids-directory -c config.json -s ses-02 -m submap.json`
 
 
+
+### Tutorial Example: 
+
+First, let us begin with the initial step to determine what properties are needed to map the raw DICOM images to a formated BIDS directory. As mentioned earlier, this step cannot be automated.
+
+Make sure you are in the `pipeline-tutorial` directory. Then, you'll need to run `dcm2bids_helper` on one folder to get out the initial conversion conversion by `dcm2niix`. This will produce the full NIfTI images (`.nii.gz` files), and the meta-data files (`.json` files) that `dcm2bids` uses to guide BIDS formatting.   
+
+`$ dcm2bids_helper -d data/sourcedata/SUB1_MAR5_2014 -o ./`
+
+This will create a temporary directory that contains the converted example in the `helper` directory:
+
+```
+pipeline-tutorial
+└── data
+    ├── sourcedata
+    │   ├── SUB1_MAR5_2014
+    │   └── SUB2_MAR10_2014
+    └── tmp_dcm2bids
+        └── helper
+```
+
+Inside `helper`, you'll see your NIfTIs and your meta data files. For example: 
+
+```
+002_SUB1_MAR5_2014_CNS_SAG_MPRAGE_ISO_20140305125615.json (anatomical metadata)
+002_SUB1_MAR5_2014_CNS_SAG_MPRAGE_ISO_20140305125615.nii.gz (anatomical T1w image)
+003_SUB1_MAR5_2014_ep2d_bold_TR2000_350Vols_20140305125615.json (functional metadata 1)
+003_SUB1_MAR5_2014_ep2d_bold_TR2000_350Vols_20140305125615.nii.gz (functional image 1)
+004_SUB1_MAR5_2014_ep2d_bold_TR2000_350Vols_MoCo_20140305125615.json (functional metadata 2)
+004_SUB1_MAR5_2014_ep2d_bold_TR2000_350Vols_MoCo_20140305125615.nii.gz (functional image 2)
+```
+
+`dcm2niix` automatically determines the file names using the protocol defined at the time of the scanning. Each .json contains key-value pairs for each property (e.g., acquisition time and date, sequence, etc). These .json files are critical for using `dcm2bids`, and by extension `bidsify` because they determine which image is when converting your data to BIDS. 
+
+If you open up the `.json` file for both functional images, you can see that these images are actually the same: they were acquired at the same time. The difference is that`004` is the Siemens motion-corrected data, which is typically indicated in the `SeriesDescription` and/or ` ProtocolName`. For `dcm2bids`, and thus `bidsify`, **you'll want to identify the meta-data properties that distinguish functional runs from different tasks, and from the anatomical image(s) **. 
+
+Going through the dataset, I can create a BIDS configuration file for `dcm2bids`/`bidsify` using properties from the meta-data files:
+
+```json
+{
+  "descriptions": [
+    {
+      "dataType": "func",
+      "modalityLabel": "bold",
+      "customLabels": "task-aud",
+      "criteria": {
+          "ProtocolName": "*ep2d_bold_TR2000_250Vols_MoCo*"
+      }
+    },
+    {
+      "dataType": "func",
+      "modalityLabel": "bold",
+      "customLabels": "task-motor",
+      "criteria": {
+          "ProtocolName": "*ep2d_bold_TR2000_350Vols_MoCo*"
+      }
+    },
+    {
+      "dataType": "anat",
+      "modalityLabel": "T1w",
+      "criteria": {
+        "SeriesDescription": "CNS_SAG_MPRAGE_ISO"
+      }
+    }
+  ]
+}
+```
+
+There are two types of functional images I want to use in the data sets: The auditory localizer images (`task-aud`), and the motor localizer images (`task-motor`). The `dataType` property is set as `func` and `modalityLabel` is set as `bold`. These tell `dcm2bids` that these are indeed functional images. `customLabels` will label the filename according to the task, which is a requirement of BIDS (make sure you prefix with `task-`)'. Then, under `criteria`, you will see that I used the `ProtocolName` to identify the motion corrected files for each task (`*` indicates wildcard characters for pattern matching). 
+
+The anatomical image in this example has different values for `dataType` and `modalityLabel`, along with using its `SeriesDescription` for the `criteria`. If you had a T2-weighted anatomical image, you would change `modalityLabel` to `T2w`.  
+
+Be sure to read the [`dcm2bids` documentation](https://cbedetti.github.io/Dcm2Bids/config/) to get a full understanding of the configuration file. Save the file as `bids_config.json` in the top-level directory. Then, run `bidsify`:
+
+`$ bidsify -d data/sourcedata/ -o data/ -c bids_config.json`
+
+After running, your project directory should look like this:
+
+```
+pipeline-tutorial
+├── bids_config.json
+└── data
+    ├── CHANGES
+    ├── dataset_description.json
+    ├── participants.tsv
+    ├── README
+    ├── sourcedata
+    ├── sub-01
+    ├── sub-02
+    └── tmp_dcm2bids
+```
+
+Apart from the `tmp_dcm2bids` directory (which you can delete once you're satisfied with the conversion), this is a minimal BIDS directory! Navigate to one of the `sub` directories and you can see the data structure for the subject:
+
+```
+sub-01
+├── anat
+│   ├── sub-01_T1w.json
+│   └── sub-01_T1w.nii.gz
+└── func
+    ├── sub-01_task-aud_run-01_bold.json
+    ├── sub-01_task-aud_run-01_bold.nii.gz
+    ├── sub-01_task-aud_run-02_bold.json
+    ├── sub-01_task-aud_run-02_bold.nii.gz
+    ├── sub-01_task-motor_run-01_bold.json
+    ├── sub-01_task-motor_run-01_bold.nii.gz
+    ├── sub-01_task-motor_run-02_bold.json
+    ├── sub-01_task-motor_run-02_bold.nii.gz
+    ├── sub-01_task-motor_run-03_bold.json
+    ├── sub-01_task-motor_run-03_bold.nii.gz
+    ├── sub-01_task-motor_run-04_bold.json
+    └── sub-01_task-motor_run-04_bold.nii.gz
+```
+
+Congratulations, you now have your first BIDS dataset! **Be sure to check everything to ensure that it is correct.**  You will notice that you now have the appropriate number of functional images in the `func` directory, and that the `anat` directory contains the one anatomical image. 
+
+## Quality Control 
+
+
+
+
+
+
+
+
+
+ 
 
 ## Minimal Preprocessing
 
